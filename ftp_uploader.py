@@ -5,6 +5,9 @@ from ftplib import FTP
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
+from dotenv import load_dotenv
+
+load_dotenv()
 
 VALID_OU_NUMBERS = {
     "2",
@@ -59,9 +62,9 @@ class FTPUploader:
         self.root = root
         self.root.title("FTP Uploader")
         self.root.geometry("700x600")
-
-
+        
         self.create_widgets()
+        self.load_env_config()
 
     def create_widgets(self):
         # FTP Server Details
@@ -96,6 +99,19 @@ class FTPUploader:
         self.log_area = scrolledtext.ScrolledText(width=80, height=15)
         self.log_area.pack(fill="both", expand=True)
 
+    def load_env_config(self):
+        host = os.getenv("FTP_HOST", "")
+        login = os.getenv("FTP_LOGIN", "")
+        password = os.getenv("FTP_PASSWORD", "")
+
+        if host:
+            self.ftp_host.insert(0, host)
+
+        if login:
+            self.ftp_login.insert(0, login)
+
+        if password:
+            self.ftp_password.insert(0, password)
 
 
 
@@ -150,12 +166,12 @@ class FTPUploader:
 
  
     def upload_files(self):
-        host = self.ftp_host.get()
-        login = self.ftp_login.get()
-        password = self.ftp_password.get()
-        base_dir = self.base_dir.get()
-        local_dir = self.local_dir.get()
-        filename_mask = self.filename_mask.get()
+        host = self.ftp_host.get().strip()
+        login = self.ftp_login.get().strip()
+        password = self.ftp_password.get().strip()
+        base_dir = self.base_dir.get().strip()
+        local_dir = self.local_dir.get().strip()
+        filename_mask = self.filename_mask.get().strip()
 
         if not os.path.isdir(local_dir):
             self.log("Локальная папка не найдена.")
@@ -166,21 +182,27 @@ class FTPUploader:
             ftp.login(login, password)
             self.log(f"Подключение к FTP серверу {host} успешно.")
         except Exception as e:
-            self.log(f"Ошибка подключения к FTP серверу: {e}")
+            self.log(f"Ошибка подключения: {e}")
             return
 
-        # Получаем список папок на сервере один раз
         try:
-            ftp.cwd(base_dir)
+            root_dir = ftp.pwd()  # 🔹 запоминаем стартовую папку
+
+            if base_dir:
+                ftp.cwd(base_dir)
+                self.log(f"Переход в папку {base_dir}")
+
+            working_dir = ftp.pwd()  # 🔹 абсолютный путь
+
             all_dirs = ftp.nlst()
+
         except Exception as e:
-            self.log(f"Ошибка получения списка папок на FTP: {e}")
+            self.log(f"Ошибка перехода в директорию: {e}")
             ftp.quit()
             return
 
         for file in os.listdir(local_dir):
 
-            # Только Excel
             if not file.lower().endswith((".xlsx", ".xls")):
                 continue
 
@@ -188,30 +210,28 @@ class FTPUploader:
             if not os.path.isfile(full_path):
                 continue
 
-            # Извлекаем номер ОУ из имени файла
             ou_number = self.extract_ou_number(file)
             if not ou_number:
-                self.log(f"Пропущен файл '{file}' - не найден номер ОУ.")
+                self.log(f"Пропущен '{file}' — номер ОУ не найден.")
                 continue
 
-            # Ищем папку на сервере
-            remote_dir = None
-            pattern = rf'(?<!\d){ou_number}(?!\d)'  # число не должно быть частью другого числа
+            remote_folder = None
+            pattern = rf'(?<!\d){ou_number}(?!\d)'
+
             for d in all_dirs:
                 if re.search(pattern, d):
-                    remote_dir = f"{base_dir}/{d}"
+                    remote_folder = d
                     break
 
-            if not remote_dir:
-                self.log(f"На FTP не найдена папка для ОУ {ou_number}")
+            if not remote_folder:
+                self.log(f"Папка для ОУ {ou_number} не найдена.")
                 continue
 
-            # Формируем имя файла по маске, сохраняем расширение
             ext = Path(file).suffix
-            if not filename_mask.strip():
+
+            if not filename_mask:
                 new_filename = file
             else:
-                # Добавляем расширение отдельно, если не указан {ext} в маске
                 if '{ext}' not in filename_mask:
                     new_filename = filename_mask.format(
                         ou=ou_number,
@@ -225,18 +245,25 @@ class FTPUploader:
                     )
 
             try:
-                # Загружаем файл напрямую в папку на сервере
-                remote_file_path = f"{remote_dir}/{new_filename}"
-                with open(full_path, 'rb') as f:
-                    ftp.storbinary(f'STOR {remote_file_path}', f)
+                # 🔹 всегда используем абсолютный путь
+                ftp.cwd(f"{working_dir}/{remote_folder}")
 
-                self.log(f"{file} → {remote_file_path}")
+                with open(full_path, 'rb') as f:
+                    ftp.storbinary(f"STOR {new_filename}", f)
+
+                self.log(f"{file} → {remote_folder}/{new_filename}")
+
+                # 🔹 возвращаемся обратно в working_dir
+                ftp.cwd(working_dir)
 
             except Exception as e:
                 self.log(f"Ошибка загрузки '{file}': {e}")
 
         ftp.quit()
         self.log("Загрузка завершена.")
+
+
+
 
 
 
