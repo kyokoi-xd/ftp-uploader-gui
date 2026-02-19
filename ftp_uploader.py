@@ -6,10 +6,12 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
 from dotenv import load_dotenv
+from datetime import datetime
 
 load_dotenv()
 
 VALID_OU_NUMBERS = {
+    "002",
     "2",
     "162",
     "221",
@@ -54,7 +56,6 @@ VALID_OU_NUMBERS = {
     "608",
     "654",
     "658",
-    "333"
 }
 
 class FTPUploader:
@@ -83,6 +84,10 @@ class FTPUploader:
         tk.Label(text="Папка на FTP:").pack(anchor='w')
         self.base_dir = tk.Entry(width=60)
         self.base_dir.pack()
+
+        tk.Label(text="Доп. путь внутри папки школы (необязательно):").pack(anchor='w')
+        self.inner_path = tk.Entry(width=60)
+        self.inner_path.pack()
         
         tk.Label(text="Локальная папка:").pack(anchor='w')
         self.local_dir = tk.Entry(width=60)
@@ -92,6 +97,11 @@ class FTPUploader:
         tk.Label(text="Маска имени файла").pack(anchor='w')
         self.filename_mask = tk.Entry(width=60)
         self.filename_mask.pack()
+
+        tk.Label(text="Дата (ДД_ММ_ГГГГ) — можно оставить пустым:").pack(anchor='w')
+        self.custom_date = tk.Entry(width=60)
+        self.custom_date.pack()
+
 
         tk.Button(text="Загрузить", command=self.start_upload, bg='green', fg="white").pack(pady=10)
 
@@ -146,24 +156,6 @@ class FTPUploader:
 
         return None
     
-    def find_remote_folder(self, ftp, base_dir, ou_number):
-        try:
-            ftp.cwd(base_dir)
-            items = ftp.nlst()
-
-            pattern = rf'(?<!\d){ou_number}(?!\d)'
-
-            for item in items:
-                if re.search(pattern, item):
-                    return f"{base_dir}/{item}"
-
-            return None
-
-        except Exception as e:
-            self.log(f"Ошибка поиска папки на FTP: {e}")
-            return None
-
-
  
     def upload_files(self):
         host = self.ftp_host.get().strip()
@@ -172,6 +164,9 @@ class FTPUploader:
         base_dir = self.base_dir.get().strip()
         local_dir = self.local_dir.get().strip()
         filename_mask = self.filename_mask.get().strip()
+        custom_date = self.custom_date.get().strip()
+        inner_path = self.inner_path.get().strip().strip("/")
+
 
         if not os.path.isdir(local_dir):
             self.log("Локальная папка не найдена.")
@@ -179,7 +174,9 @@ class FTPUploader:
 
         try:
             ftp = FTP(host)
+            ftp.encoding = "cp1251"
             ftp.login(login, password)
+            ftp.voidcmd("TYPE I")
             self.log(f"Подключение к FTP серверу {host} успешно.")
         except Exception as e:
             self.log(f"Ошибка подключения: {e}")
@@ -203,9 +200,6 @@ class FTPUploader:
 
         for file in os.listdir(local_dir):
 
-            if not file.lower().endswith((".xlsx", ".xls")):
-                continue
-
             full_path = os.path.join(local_dir, file)
             if not os.path.isfile(full_path):
                 continue
@@ -216,44 +210,73 @@ class FTPUploader:
                 continue
 
             remote_folder = None
-            pattern = rf'(?<!\d){ou_number}(?!\d)'
 
             for d in all_dirs:
-                if re.search(pattern, d):
-                    remote_folder = d
+                numbers = re.findall(r'\d+', d)
+                for num in numbers:
+                    if int(num) == int(ou_number):
+                        remote_folder = d
+                        break
+                if remote_folder:
                     break
 
+  
             if not remote_folder:
                 self.log(f"Папка для ОУ {ou_number} не найдена.")
                 continue
 
             ext = Path(file).suffix
+            try:
+                # Переход в папку школы
+                ftp.cwd(f"{working_dir}/{remote_folder}")
 
-            if not filename_mask:
-                new_filename = file
-            else:
-                if '{ext}' not in filename_mask:
-                    new_filename = filename_mask.format(
-                        ou=ou_number,
-                        original=file
-                    ) + ext
+                # Если указан доп. путь — создаём и переходим
+                if inner_path:
+                    parts = inner_path.split("/")
+
+                    for part in parts:
+                        try:
+                            ftp.cwd(part)
+                        except:
+                            ftp.mkd(part)
+                            ftp.cwd(part)
+
+                # Проверяем существующие файлы
+                existing_files = ftp.nlst()
+
+                if not filename_mask:
+                    new_filename = file
                 else:
-                    new_filename = filename_mask.format(
-                        ou=ou_number,
-                        original=file,
-                        ext=ext
+                    counter = 1
+                    new_filename = self.generate_filename(
+                        filename_mask,
+                        file,
+                        ou_number,
+                        custom_date,
+                        counter
                     )
 
-            try:
-                # 🔹 всегда используем абсолютный путь
-                ftp.cwd(f"{working_dir}/{remote_folder}")
+                    while new_filename in existing_files:
+                        counter += 1
+                        new_filename = self.generate_filename(
+                            filename_mask,
+                            file,
+                            ou_number,
+                            custom_date,
+                            counter
+                        )
+
 
                 with open(full_path, 'rb') as f:
                     ftp.storbinary(f"STOR {new_filename}", f)
 
-                self.log(f"{file} → {remote_folder}/{new_filename}")
+                full_remote_path = remote_folder
+                if inner_path:
+                    full_remote_path += "/" + inner_path
 
-                # 🔹 возвращаемся обратно в working_dir
+                self.log(f"{file} → {full_remote_path}/{new_filename}")
+
+                # Возврат в рабочую директорию
                 ftp.cwd(working_dir)
 
             except Exception as e:
@@ -263,11 +286,35 @@ class FTPUploader:
         self.log("Загрузка завершена.")
 
 
+    def generate_filename(self, filename_mask, file, ou_number, custom_date, counter=1):
+        ext = Path(file).suffix
+        original_name = Path(file).stem
+
+        # Если дата введена вручную
+        if custom_date:
+            date_str = custom_date
+            datetime_str = custom_date
+        else:
+            now = datetime.now()
+            date_str = now.strftime("%d_%m_%Y")
+            datetime_str = now.strftime("%d_%m_%Y_%H_%M_%S")
+
+        new_name = filename_mask.format(
+            ou=ou_number,
+            date=date_str,
+            datetime=datetime_str,
+            original=original_name,
+            ext=ext,
+            counter=counter
+        )
+
+        if not new_name.endswith(ext):
+            new_name += ext
+
+        return new_name
 
 
 
-
-    
     def start_upload(self):
         threading.Thread(target=self.upload_files).start()
 
