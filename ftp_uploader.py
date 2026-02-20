@@ -163,7 +163,7 @@ class FTPUploader:
         password = self.ftp_password.get().strip()
         base_dir = self.base_dir.get().strip()
         local_dir = self.local_dir.get().strip()
-        filename_mask = self.filename_mask.get().strip()
+        filename_mask = self.filename_mask.get().replace("\n", "").replace("\r", "").strip()
         custom_date = self.custom_date.get().strip()
         inner_path = self.inner_path.get().strip().strip("/")
 
@@ -173,10 +173,22 @@ class FTPUploader:
             return
 
         try:
-            ftp = FTP(host)
-            ftp.encoding = "cp1251"
+            ftp = FTP()
+            ftp.connect(host, 21, timeout=15)
+
             ftp.login(login, password)
+
+            # Пытаемся выключить UTF8
+            try:
+                ftp.sendcmd("OPTS UTF8 OFF")
+            except:
+                pass
+
+            # Принудительно ставим кодировку
+            ftp.encoding = "cp1251"
+
             ftp.voidcmd("TYPE I")
+
             self.log(f"Подключение к FTP серверу {host} успешно.")
         except Exception as e:
             self.log(f"Ошибка подключения: {e}")
@@ -191,7 +203,12 @@ class FTPUploader:
 
             working_dir = ftp.pwd()  # 🔹 абсолютный путь
 
-            all_dirs = ftp.nlst()
+            all_dirs = []
+
+            def collect_dirs(data):
+                all_dirs.append(data.decode("cp1251").strip())
+
+            ftp.retrbinary("NLST", collect_dirs)
 
         except Exception as e:
             self.log(f"Ошибка перехода в директорию: {e}")
@@ -228,18 +245,27 @@ class FTPUploader:
             ext = Path(file).suffix
             try:
                 # Переход в папку школы
-                ftp.cwd(f"{working_dir}/{remote_folder}")
+                ftp.cwd(working_dir)
+                ftp.cwd(remote_folder)
 
-                # Если указан доп. путь — создаём и переходим
+                # Если указан доп. путь — просто переходи
                 if inner_path:
                     parts = inner_path.split("/")
 
                     for part in parts:
-                        try:
-                            ftp.cwd(part)
-                        except:
-                            ftp.mkd(part)
-                            ftp.cwd(part)
+                        dirs = []
+                        ftp.retrbinary("NLST", lambda d: dirs.append(d.decode("cp1251").strip()))
+
+                        match = None
+                        for d in dirs:
+                            if d.strip().lower() == part.strip().lower():
+                                match = d
+                                break
+
+                        if not match:
+                            raise Exception(f"Папка '{part}' не существует на сервере")
+
+                        ftp.cwd(match)
 
                 # Проверяем существующие файлы
                 existing_files = ftp.nlst()
@@ -290,7 +316,6 @@ class FTPUploader:
         ext = Path(file).suffix
         original_name = Path(file).stem
 
-        # Если дата введена вручную
         if custom_date:
             date_str = custom_date
             datetime_str = custom_date
@@ -307,6 +332,15 @@ class FTPUploader:
             ext=ext,
             counter=counter
         )
+
+        # 🔥 УДАЛЯЕМ запрещённые символы
+        new_name = new_name.replace("\n", "").replace("\r", "").strip()
+
+        # Удаляем двойные пробелы
+        new_name = re.sub(r"\s+", " ", new_name)
+
+        # Убираем запрещённые для FTP символы
+        new_name = re.sub(r'[<>:"/\\|?*]', "_", new_name)
 
         if not new_name.endswith(ext):
             new_name += ext
