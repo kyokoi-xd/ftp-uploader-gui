@@ -174,18 +174,16 @@ class FTPUploader:
 
         try:
             ftp = FTP()
-            ftp.connect(host, 21, timeout=15)
+            ftp.encoding = "cp1251"   # ОБЯЗАТЕЛЬНО ДО connect/login
 
+            ftp.connect(host, 21, timeout=15)
             ftp.login(login, password)
 
-            # Пытаемся выключить UTF8
+            # отключаем UTF8 если сервер его рекламирует
             try:
                 ftp.sendcmd("OPTS UTF8 OFF")
             except:
                 pass
-
-            # Принудительно ставим кодировку
-            ftp.encoding = "cp1251"
 
             ftp.voidcmd("TYPE I")
 
@@ -204,11 +202,7 @@ class FTPUploader:
             working_dir = ftp.pwd()  # 🔹 абсолютный путь
 
             all_dirs = []
-
-            def collect_dirs(data):
-                all_dirs.append(data.decode("cp1251").strip())
-
-            ftp.retrbinary("NLST", collect_dirs)
+            ftp.retrlines("NLST", lambda line: all_dirs.append(line.strip()))
 
         except Exception as e:
             self.log(f"Ошибка перехода в директорию: {e}")
@@ -254,7 +248,7 @@ class FTPUploader:
 
                     for part in parts:
                         dirs = []
-                        ftp.retrbinary("NLST", lambda d: dirs.append(d.decode("cp1251").strip()))
+                        ftp.retrlines("NLST", lambda line: dirs.append(line.strip()))
 
                         match = None
                         for d in dirs:
