@@ -240,26 +240,22 @@ class FTPUploader:
             try:
                 # Переход в папку школы
                 ftp.cwd(working_dir)
-                ftp.cwd(remote_folder)
-
-                # Если указан доп. путь — просто переходи
+                # Нормализация пути
                 if inner_path:
-                    parts = inner_path.split("/")
+                    normalized_path = inner_path.replace("\\", "/").strip()
 
-                    for part in parts:
-                        dirs = []
-                        ftp.retrlines("NLST", lambda line: dirs.append(line.strip()))
+                    try:
+                        # если путь начинается с / — считаем его абсолютным
+                        if normalized_path.startswith("/"):
+                            ftp.cwd(normalized_path)
+                        else:
+                            # иначе — относительно текущей папки школы
+                            ftp.cwd(f"{remote_folder}/{normalized_path}")
 
-                        match = None
-                        for d in dirs:
-                            if d.strip().lower() == part.strip().lower():
-                                match = d
-                                break
-
-                        if not match:
-                            raise Exception(f"Папка '{part}' не существует на сервере")
-
-                        ftp.cwd(match)
+                    except Exception as e:
+                        raise Exception(f"Путь не существует: {normalized_path}")
+                else:
+                    ftp.cwd(remote_folder)
 
                 # Проверяем существующие файлы
                 existing_files = ftp.nlst()
