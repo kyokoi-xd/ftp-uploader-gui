@@ -10,6 +10,11 @@ from datetime import datetime
 
 load_dotenv()
 
+SPECIAL_SCHOOLS = {
+    "clschool39": ["шря", "clschool39"],
+    "deltaschool": ["дельта", "deltaschool"],
+    "SVU": ["сву", "svu"]
+}
 VALID_OU_NUMBERS = {
     "002",
     "2",
@@ -94,15 +99,23 @@ class FTPUploader:
         self.local_dir.pack()
         tk.Button(text="Выбрать папку", command=self.select_local_folder).pack(pady=5)
 
-        tk.Label(text="Маска имени файла").pack(anchor='w')
-        self.filename_mask = tk.Entry(width=60)
+        mask_frame = tk.Frame(self.root)
+        mask_frame.pack(anchor='w')
+
+        tk.Label(mask_frame, text="Маска имени файла").pack(side="left")
+
+        tk.Button(
+            mask_frame,
+            text=" ? ",
+            command=self.show_mask_help,
+            bg="#444",
+            fg="white"
+        ).pack(side="left", padx=5)
+
+        self.filename_mask = tk.Entry(self.root, width=60)
         self.filename_mask.pack()
 
-        tk.Label(text="Дата (ДД_ММ_ГГГГ) — можно оставить пустым:").pack(anchor='w')
-        self.custom_date = tk.Entry(width=60)
-        self.custom_date.pack()
-
-
+        tk.Button(text="Предварительный просмотр",command=self.preview_rename,bg="blue",fg="white").pack(pady=5)
         tk.Button(text="Загрузить", command=self.start_upload, bg='green', fg="white").pack(pady=10)
 
         tk.Label(text="Лог:").pack(anchor='w')
@@ -163,8 +176,6 @@ class FTPUploader:
         password = self.ftp_password.get().strip()
         base_dir = self.base_dir.get().strip()
         local_dir = self.local_dir.get().strip()
-        filename_mask = self.filename_mask.get().replace("\n", "").replace("\r", "").strip()
-        custom_date = self.custom_date.get().strip()
         inner_path = self.inner_path.get().strip().strip("/")
 
 
@@ -193,7 +204,6 @@ class FTPUploader:
             return
 
         try:
-            root_dir = ftp.pwd()  # 🔹 запоминаем стартовую папку
 
             if base_dir:
                 ftp.cwd(base_dir)
@@ -236,7 +246,6 @@ class FTPUploader:
                 self.log(f"Папка для ОУ {ou_number} не найдена.")
                 continue
 
-            ext = Path(file).suffix
             try:
                 # Переход в папку школы
                 ftp.cwd(working_dir)
@@ -258,30 +267,7 @@ class FTPUploader:
                     ftp.cwd(remote_folder)
 
                 # Проверяем существующие файлы
-                existing_files = ftp.nlst()
-
-                if not filename_mask:
-                    new_filename = file
-                else:
-                    counter = 1
-                    new_filename = self.generate_filename(
-                        filename_mask,
-                        file,
-                        ou_number,
-                        custom_date,
-                        counter
-                    )
-
-                    while new_filename in existing_files:
-                        counter += 1
-                        new_filename = self.generate_filename(
-                            filename_mask,
-                            file,
-                            ou_number,
-                            custom_date,
-                            counter
-                        )
-
+                new_filename = file
 
                 with open(full_path, 'rb') as f:
                     ftp.storbinary(f"STOR {new_filename}", f)
@@ -302,17 +288,13 @@ class FTPUploader:
         self.log("Загрузка завершена.")
 
 
-    def generate_filename(self, filename_mask, file, ou_number, custom_date, counter=1):
+    def generate_filename(self, filename_mask, file, ou_number, counter=1):
         ext = Path(file).suffix
         original_name = Path(file).stem
 
-        if custom_date:
-            date_str = custom_date
-            datetime_str = custom_date
-        else:
-            now = datetime.now()
-            date_str = now.strftime("%d_%m_%Y")
-            datetime_str = now.strftime("%d_%m_%Y_%H_%M_%S")
+        now = datetime.now()
+        date_str = now.strftime("%d_%m_%Y")
+        datetime_str = now.strftime("%d_%m_%Y_%H_%M_%S")
 
         new_name = filename_mask.format(
             ou=ou_number,
@@ -336,8 +318,124 @@ class FTPUploader:
             new_name += ext
 
         return new_name
+    
+    def preview_rename(self):
+        local_dir = self.local_dir.get().strip()
+        filename_mask = self.filename_mask.get().strip()
 
+        if not os.path.isdir(local_dir):
+            self.log("Локальная папка не найдена.")
+            return
 
+        if not filename_mask:
+            self.log("Маска имени файла не указана.")
+            return
+
+        preview_data = []
+
+        for file in os.listdir(local_dir):
+            full_path = os.path.join(local_dir, file)
+            if not os.path.isfile(full_path):
+                continue
+
+            ou_number = self.extract_ou_number(file)
+            if not ou_number:
+                continue
+
+            new_name = self.generate_filename(
+                filename_mask,
+                file,
+                ou_number,
+                1
+            )
+
+            preview_data.append((file, new_name))
+
+        if not preview_data:
+            self.log("Нет файлов для предварительного просмотра.")
+            return
+
+        self.show_preview_window(preview_data, local_dir)
+
+    def show_preview_window(self, preview_data, local_dir):
+        preview_window = tk.Toplevel(self.root)
+        preview_window.title("Предварительный просмотр переименования")
+        preview_window.geometry("800x500")
+
+        text = scrolledtext.ScrolledText(preview_window, width=100, height=25)
+        text.pack(fill="both", expand=True)
+
+        for old, new in preview_data:
+            text.insert(tk.END, f"{old}  →  {new}\n")
+
+        def confirm():
+            self.execute_rename(preview_data, local_dir)
+            preview_window.destroy()
+
+        tk.Button(
+            preview_window,
+            text="Подтвердить переименование",
+            command=confirm,
+            bg="green",
+            fg="white"
+        ).pack(pady=10)
+
+    def execute_rename(self, preview_data, local_dir):
+        for old, new in preview_data:
+            old_path = os.path.join(local_dir, old)
+            new_path = os.path.join(local_dir, new)
+
+            counter = 1
+            base_new = new
+
+            while os.path.exists(new_path):
+                name = Path(base_new).stem
+                ext = Path(base_new).suffix
+                new_filename = f"{name}_{counter}{ext}"
+                new_path = os.path.join(local_dir, new_filename)
+                counter += 1
+
+            try:
+                os.rename(old_path, new_path)
+                self.log(f"{old} → {os.path.basename(new_path)}")
+            except Exception as e:
+                self.log(f"Ошибка переименования '{old}': {e}")
+
+        self.log("Переименование завершено.")
+
+    def show_mask_help(self):
+        help_window = tk.Toplevel(self.root)
+        help_window.title("Подсказка по маске имени файла")
+        help_window.geometry("600x400")
+
+        text = scrolledtext.ScrolledText(help_window, wrap="word")
+        text.pack(fill="both", expand=True)
+
+        help_text = """
+        ДОСТУПНЫЕ ПЕРЕМЕННЫЕ:
+
+        {ou}        — номер школы
+        {date}      — текущая дата (ДД_ММ_ГГГГ)
+        {datetime}  — дата и время (ДД_ММ_ГГГГ_ЧЧ_ММ_СС)
+        {original}  — исходное имя файла без расширения
+
+        ВАЖНО:
+        • Расширение добавляется автоматически
+        • Не нужно писать .xlsx или .pdf вручную
+        • Переменные обязательно писать в фигурных скобках {}
+
+        ПРИМЕРЫ:
+
+        {ou}_отчет_{date}
+        {ou}_{original}_{date}
+        {ou}_отчет_{datetime}
+
+        Можно писать обычный текст:
+        284_отчет_15_03_2025
+        """
+
+        text.insert("1.0", help_text)
+        text.config(state="disabled")
 
     def start_upload(self):
         threading.Thread(target=self.upload_files).start()
