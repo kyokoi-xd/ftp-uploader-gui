@@ -15,6 +15,11 @@ SPECIAL_SCHOOLS = {
     "deltaschool": ["дельта", "deltaschool"],
     "SVU": ["сву", "svu"]
 }
+SPECIAL_NUMBERS = {
+    "5661": "SVU",
+    "5663": "clschool39",
+    "5664": "deltaschool"
+}
 VALID_OU_NUMBERS = {
     "002",
     "2",
@@ -90,7 +95,11 @@ class FTPUploader:
         self.base_dir = tk.Entry(width=60)
         self.base_dir.pack()
 
-        tk.Label(text="Доп. путь внутри папки школы (необязательно):").pack(anchor='w')
+        tk.Label(text="Код района (если есть):").pack(anchor='w')
+        self.district_code = tk.Entry(width=10)
+        self.district_code.pack(anchor='w')
+
+        tk.Label(text="Доп. путь внутри папки школы:").pack(anchor='w')
         self.inner_path = tk.Entry(width=60)
         self.inner_path.pack()
         
@@ -104,13 +113,7 @@ class FTPUploader:
 
         tk.Label(mask_frame, text="Маска имени файла").pack(side="left")
 
-        tk.Button(
-            mask_frame,
-            text=" ? ",
-            command=self.show_mask_help,
-            bg="#444",
-            fg="white"
-        ).pack(side="left", padx=5)
+        tk.Button(mask_frame,text=" ? ",command=self.show_mask_help,bg="#444",fg="white").pack(side="left", padx=5)
 
         self.filename_mask = tk.Entry(self.root, width=60)
         self.filename_mask.pack()
@@ -153,19 +156,40 @@ class FTPUploader:
             self.local_dir.insert(0, folder)
     
     def extract_ou_number(self, text):
-        # 1️⃣ Приоритет — номер после № / N / N°
+
+        district_code = self.district_code.get().strip()
+
+        # 1️⃣ Приоритет — номер после №
         match = re.search(r'(?:№|N|N°)\s*(\d+)', text)
         if match:
             number = match.group(1)
+
+            # проверка обычного номера
             if number in VALID_OU_NUMBERS:
                 return number
 
-        # 2️⃣ Иначе проверяем все числа в строке
+            # проверка номера с кодом района
+            if district_code and number.startswith(district_code):
+                possible = number[len(district_code):]
+                if possible in VALID_OU_NUMBERS:
+                    return possible
+
+        # 2️⃣ проверяем все числа
         all_numbers = re.findall(r'\d+', text)
 
         for number in all_numbers:
+
+            if number in SPECIAL_NUMBERS:
+                return SPECIAL_NUMBERS[number]
+            
             if number in VALID_OU_NUMBERS:
                 return number
+
+            if district_code and number.startswith(district_code):
+                possible = number[len(district_code):]
+
+                if possible in VALID_OU_NUMBERS:
+                    return possible
 
         return None
     
@@ -226,24 +250,45 @@ class FTPUploader:
                 continue
 
             ou_number = self.extract_ou_number(file)
+            special_folder = None
+
             if not ou_number:
-                self.log(f"Пропущен '{file}' — номер ОУ не найден.")
-                continue
+                special_folder = self.extract_special_school(file)
+
+                if not special_folder:
+                    self.log(f"Пропущен '{file}' — учреждение не распознано.")
+                    continue
 
             remote_folder = None
 
-            for d in all_dirs:
-                numbers = re.findall(r'\d+', d)
-                for num in numbers:
-                    if int(num) == int(ou_number):
+            # если это специальная школа (не число)
+            if not str(ou_number).isdigit():
+
+                for d in all_dirs:
+                    if d.lower() == str(ou_number).lower():
                         remote_folder = d
                         break
-                if remote_folder:
-                    break
+
+            # если обычная школа
+            else:
+
+                for d in all_dirs:
+                    numbers = re.findall(r'\d+', d)
+
+                    for num in numbers:
+                        if num == str(ou_number):
+                            remote_folder = d
+                            break
+
+                    if remote_folder:
+                        break
 
   
             if not remote_folder:
-                self.log(f"Папка для ОУ {ou_number} не найдена.")
+                if ou_number:
+                    self.log(f"Папка для ОУ {ou_number} не найдена.")
+                else:
+                    self.log(f"Папка для учреждения '{special_folder}' не найдена.")
                 continue
 
             try:
@@ -287,6 +332,16 @@ class FTPUploader:
         ftp.quit()
         self.log("Загрузка завершена.")
 
+    def extract_special_school(self, text):
+        text_lower = text.lower()
+
+        for folder, keywords in SPECIAL_SCHOOLS.items():
+            for keyword in keywords:
+                if keyword.lower() in text_lower:
+                    return folder
+
+        return None
+
 
     def generate_filename(self, filename_mask, file, ou_number, counter=1):
         ext = Path(file).suffix
@@ -296,14 +351,17 @@ class FTPUploader:
         date_str = now.strftime("%d_%m_%Y")
         datetime_str = now.strftime("%d_%m_%Y_%H_%M_%S")
 
-        new_name = filename_mask.format(
-            ou=ou_number,
-            date=date_str,
-            datetime=datetime_str,
-            original=original_name,
-            ext=ext,
-            counter=counter
-        )
+        try:
+            new_name = filename_mask.format(
+                ou=ou_number,
+                date=date_str,
+                datetime=datetime_str,
+                original=original_name,
+                ext=ext,
+                counter=counter
+            )
+        except KeyError as e:
+            raise Exception(f"Неизвестная переменная в маске: {e}")
 
         # 🔥 УДАЛЯЕМ запрещённые символы
         new_name = new_name.replace("\n", "").replace("\r", "").strip()
@@ -339,8 +397,12 @@ class FTPUploader:
                 continue
 
             ou_number = self.extract_ou_number(file)
+
             if not ou_number:
-                continue
+                special = self.extract_special_school(file)
+                if not special:
+                    continue
+                ou_number = special
 
             new_name = self.generate_filename(
                 filename_mask,
