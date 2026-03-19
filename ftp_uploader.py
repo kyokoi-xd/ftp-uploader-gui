@@ -4,9 +4,12 @@ import threading
 from ftplib import FTP
 from pathlib import Path
 import tkinter as tk
-from tkinter import filedialog, messagebox, scrolledtext
+import ttkbootstrap as ttk
+from tkinter import filedialog, messagebox
+from ttkbootstrap.scrolled import ScrolledText
 from dotenv import load_dotenv
 from datetime import datetime
+
 
 load_dotenv()
 
@@ -78,52 +81,86 @@ class FTPUploader:
         self.load_env_config()
 
     def create_widgets(self):
-        # FTP Server Details
-        tk.Label(text="FTP адрес:").pack(anchor='w')
-        self.ftp_host = tk.Entry(width=60)
-        self.ftp_host.pack()
+        # Общий контейнер
+        main = ttk.Frame(self.root)
+        main.pack(fill="both", expand=True)
 
-        tk.Label(text="Логин:").pack(anchor='w')
-        self.ftp_login = tk.Entry(width=60)
-        self.ftp_login.pack()
+        # ================= FTP =================
+        ftp_frame = ttk.LabelFrame(main, text="FTP настройки")
+        ftp_frame.grid(row=0, column=0, sticky="ew", pady=5)
 
-        tk.Label(text="Пароль:").pack(anchor='w')
-        self.ftp_password = tk.Entry(width=60, show="*")
-        self.ftp_password.pack()
+        ttk.Label(ftp_frame, text="FTP адрес").grid(row=0, column=0, sticky="w")
+        self.ftp_host = ttk.Entry(ftp_frame)
+        self.ftp_host.grid(row=0, column=1, sticky="ew", padx=5)
 
-        tk.Label(text="Папка на FTP:").pack(anchor='w')
-        self.base_dir = tk.Entry(width=60)
-        self.base_dir.pack()
+        ttk.Label(ftp_frame, text="Логин").grid(row=1, column=0, sticky="w")
+        self.ftp_login = ttk.Entry(ftp_frame)
+        self.ftp_login.grid(row=1, column=1, sticky="ew", padx=5)
 
-        tk.Label(text="Код района (если есть):").pack(anchor='w')
-        self.district_code = tk.Entry(width=10)
-        self.district_code.pack(anchor='w')
+        ttk.Label(ftp_frame, text="Пароль").grid(row=2, column=0, sticky="w")
+        self.ftp_password = ttk.Entry(ftp_frame, show="*")
+        self.ftp_password.grid(row=2, column=1, sticky="ew", padx=5)
 
-        tk.Label(text="Доп. путь внутри папки школы:").pack(anchor='w')
-        self.inner_path = tk.Entry(width=60)
-        self.inner_path.pack()
-        
-        tk.Label(text="Локальная папка:").pack(anchor='w')
-        self.local_dir = tk.Entry(width=60)
-        self.local_dir.pack()
-        tk.Button(text="Выбрать папку", command=self.select_local_folder).pack(pady=5)
+        ttk.Label(ftp_frame, text="Папка на FTP").grid(row=3, column=0, sticky="w")
+        self.base_dir = ttk.Entry(ftp_frame)
+        self.base_dir.grid(row=3, column=1, sticky="ew", padx=5)
 
-        mask_frame = tk.Frame(self.root)
-        mask_frame.pack(anchor='w')
+        ftp_frame.columnconfigure(1, weight=1)
 
-        tk.Label(mask_frame, text="Маска имени файла").pack(side="left")
+        # ================= ФАЙЛЫ =================
+        file_frame = ttk.LabelFrame(main, text="Файлы")
+        file_frame.grid(row=1, column=0, sticky="ew", pady=5)
 
-        tk.Button(mask_frame,text=" ? ",command=self.show_mask_help,bg="#444",fg="white").pack(side="left", padx=5)
+        ttk.Label(file_frame, text="Локальная папка").grid(row=0, column=0, sticky="w")
+        self.local_dir = ttk.Entry(file_frame)
+        self.local_dir.grid(row=0, column=1, sticky="ew", padx=5)
 
-        self.filename_mask = tk.Entry(self.root, width=60)
-        self.filename_mask.pack()
+        ttk.Button(file_frame, text="Выбрать", command=self.select_local_folder)\
+            .grid(row=0, column=2, padx=5)
 
-        tk.Button(text="Предварительный просмотр",command=self.preview_rename,bg="blue",fg="white").pack(pady=5)
-        tk.Button(text="Загрузить", command=self.start_upload, bg='green', fg="white").pack(pady=10)
+        ttk.Label(file_frame, text="Код района").grid(row=1, column=0, sticky="w")
+        self.district_code = ttk.Entry(file_frame, width=10)
+        self.district_code.grid(row=1, column=1, sticky="w", padx=5)
 
-        tk.Label(text="Лог:").pack(anchor='w')
-        self.log_area = scrolledtext.ScrolledText(width=80, height=15)
+        ttk.Label(file_frame, text="Доп. путь").grid(row=2, column=0, sticky="w")
+        self.inner_path = ttk.Entry(file_frame)
+        self.inner_path.grid(row=2, column=1, sticky="ew", padx=5)
+
+        file_frame.columnconfigure(1, weight=1)
+
+        # ================= ПЕРЕИМЕНОВАНИЕ =================
+        rename_frame = ttk.LabelFrame(main, text="Переименование")
+        rename_frame.grid(row=2, column=0, sticky="ew", pady=5)
+
+        ttk.Label(rename_frame, text="Маска файла").grid(row=0, column=0, sticky="w")
+
+        self.filename_mask = ttk.Entry(rename_frame)
+        self.filename_mask.grid(row=0, column=1, sticky="ew", padx=5)
+
+        ttk.Button(rename_frame, text="?", width=3,
+                command=self.show_mask_help).grid(row=0, column=2)
+
+        rename_frame.columnconfigure(1, weight=1)
+
+        # ================= КНОПКИ =================
+        btn_frame = ttk.Frame(main)
+        btn_frame.grid(row=3, column=0, pady=10)
+
+        ttk.Button(btn_frame, text="Предпросмотр",
+                command=self.preview_rename).grid(row=0, column=0, padx=5)
+
+        ttk.Button(btn_frame, text="Загрузить",
+                command=self.start_upload).grid(row=0, column=1, padx=5)
+
+        # ================= ЛОГ =================
+        log_frame = ttk.LabelFrame(main, text="Лог")
+        log_frame.grid(row=4, column=0, sticky="nsew", pady=5, padx=5)
+
+        self.log_area = ScrolledText(log_frame, height=12)
         self.log_area.pack(fill="both", expand=True)
+
+        main.columnconfigure(0, weight=1)
+        main.rowconfigure(4, weight=1)
 
     def load_env_config(self):
         host = os.getenv("FTP_HOST", "")
@@ -420,11 +457,11 @@ class FTPUploader:
         self.show_preview_window(preview_data, local_dir)
 
     def show_preview_window(self, preview_data, local_dir):
-        preview_window = tk.Toplevel(self.root)
+        preview_window = ttk.Toplevel(self.root)
         preview_window.title("Предварительный просмотр переименования")
         preview_window.geometry("800x500")
 
-        text = scrolledtext.ScrolledText(preview_window, width=100, height=25)
+        text = ScrolledText(preview_window, width=100, height=25)
         text.pack(fill="both", expand=True)
 
         for old, new in preview_data:
@@ -434,13 +471,7 @@ class FTPUploader:
             self.execute_rename(preview_data, local_dir)
             preview_window.destroy()
 
-        tk.Button(
-            preview_window,
-            text="Подтвердить переименование",
-            command=confirm,
-            bg="green",
-            fg="white"
-        ).pack(pady=10)
+        ttk.Button(preview_window, text="Подтвердить переименование", command=confirm, bg="green", fg="white", bootstyle="success").pack(pady=10)
 
     def execute_rename(self, preview_data, local_dir):
         for old, new in preview_data:
@@ -466,11 +497,11 @@ class FTPUploader:
         self.log("Переименование завершено.")
 
     def show_mask_help(self):
-        help_window = tk.Toplevel(self.root)
+        help_window = ttk.Toplevel(self.root)
         help_window.title("Подсказка по маске имени файла")
         help_window.geometry("600x400")
 
-        text = scrolledtext.ScrolledText(help_window, wrap="word")
+        text = ScrolledText(help_window, wrap="word")
         text.pack(fill="both", expand=True)
 
         help_text = """
@@ -504,6 +535,6 @@ class FTPUploader:
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
+    root = ttk.Window(themename="cosmo")
     app = FTPUploader(root)
     root.mainloop()
