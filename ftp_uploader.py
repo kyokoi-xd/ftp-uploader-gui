@@ -126,6 +126,9 @@ class FTPUploader:
         self.inner_path = ttk.Entry(file_frame)
         self.inner_path.grid(row=2, column=1, sticky="ew", padx=5)
 
+        self.progress = ttk.Progressbar(main, mode='determinate')
+        self.progress.grid(row=5, column=0, sticky="ew", padx=5, pady=5)
+
         file_frame.columnconfigure(1, weight=1)
 
         # ================= ПЕРЕИМЕНОВАНИЕ =================
@@ -162,6 +165,9 @@ class FTPUploader:
         main.columnconfigure(0, weight=1)
         main.rowconfigure(4, weight=1)
 
+        self.status_label = ttk.Label(main, text="Готов")
+        self.status_label.grid(row=6, column=0, sticky="w", padx=5)
+
     def load_env_config(self):
         host = os.getenv("FTP_HOST", "")
         login = os.getenv("FTP_LOGIN", "")
@@ -177,12 +183,35 @@ class FTPUploader:
             self.ftp_password.insert(0, password)
 
 
+    def validate_inputs(self):
+        errors = []
 
-    def log(self, message):
-        self.root.after(0, lambda: self._append_log(message))
+        if not self.ftp_host.get().strip():
+            errors.append("FTP адрес")
 
-    def _append_log(self, message):
-        self.log_area.insert(tk.END, message + "\n")
+        if not self.ftp_login.get().strip():
+            errors.append("Логин")
+
+        if not self.local_dir.get().strip():
+            errors.append("Локальная папка")
+
+        if errors:
+            messagebox.showerror("Ошибка", "Заполните поля:\n" + "\n".join(errors))
+            return False
+
+        return True
+
+
+    def log(self, message, level="info"):
+        self.root.after(0, lambda: self._append_log(message, level))
+
+    def _append_log(self, message, level="info"):
+        self.log_area.insert(tk.END, message + "\n", level)
+
+        self.log_area.tag_config("error", foreground="red")
+        self.log_area.tag_config("success", foreground="green")
+        self.log_area.tag_config("info", foreground="black")
+
         self.log_area.see(tk.END)
 
 
@@ -241,7 +270,7 @@ class FTPUploader:
 
 
         if not os.path.isdir(local_dir):
-            self.log("Локальная папка не найдена.")
+            self.log("Локальная папка не найдена.", level="error")
             return
 
         try:
@@ -259,16 +288,16 @@ class FTPUploader:
 
             ftp.voidcmd("TYPE I")
 
-            self.log(f"Подключение к FTP серверу {host} успешно.")
+            self.log(f"Подключение к FTP серверу {host} успешно.", level="success")
         except Exception as e:
-            self.log(f"Ошибка подключения: {e}")
+            self.log(f"Ошибка подключения: {e}", level="error")
             return
 
         try:
 
             if base_dir:
                 ftp.cwd(base_dir)
-                self.log(f"Переход в папку {base_dir}")
+                self.log(f"Переход в папку {base_dir}", level="info")
 
             working_dir = ftp.pwd()  # 🔹 абсолютный путь
 
@@ -276,11 +305,17 @@ class FTPUploader:
             ftp.retrlines("NLST", lambda line: all_dirs.append(line.strip()))
 
         except Exception as e:
-            self.log(f"Ошибка перехода в директорию: {e}")
+            self.log(f"Ошибка перехода в директорию: {e}", level="error")
             ftp.quit()
             return
+        
+        files = [f for f in os.listdir(local_dir) if os.path.isfile(os.path.join(local_dir, f))]
 
-        for file in os.listdir(local_dir):
+        total = len(files)
+
+        self.root.after(0, lambda: self.progress.configure(maximum=total, value=0))
+
+        for i, file in enumerate(files, start=1):
 
             full_path = os.path.join(local_dir, file)
             if not os.path.isfile(full_path):
@@ -293,13 +328,13 @@ class FTPUploader:
                 special_folder = self.extract_special_school(file)
 
                 if not special_folder:
-                    self.log(f"Пропущен '{file}' — учреждение не распознано.")
+                    self.log(f"Пропущен '{file}' — учреждение не распознано.", level="error")
                     continue
 
             remote_folder = None
 
             # если это специальная школа (не число)
-            if not str(ou_number).isdigit():
+            if ou_number and not str(ou_number).isdigit():
 
                 for d in all_dirs:
                     if d.lower() == str(ou_number).lower():
@@ -323,9 +358,9 @@ class FTPUploader:
   
             if not remote_folder:
                 if ou_number:
-                    self.log(f"Папка для ОУ {ou_number} не найдена.")
+                    self.log(f"Папка для ОУ {ou_number} не найдена.", level="error")
                 else:
-                    self.log(f"Папка для учреждения '{special_folder}' не найдена.")
+                    self.log(f"Папка для учреждения '{special_folder}' не найдена.", level="error")
                 continue
 
             try:
@@ -364,10 +399,12 @@ class FTPUploader:
                 ftp.cwd(working_dir)
 
             except Exception as e:
-                self.log(f"Ошибка загрузки '{file}': {e}")
+                self.log(f"Ошибка загрузки '{file}': {e}", level="error")
+            
+            self.root.after(0, lambda i=i: self.progress.configure(value=i))
 
         ftp.quit()
-        self.log("Загрузка завершена.")
+        self.log("Загрузка завершена.", level="success")
 
     def extract_special_school(self, text):
         text_lower = text.lower()
@@ -419,11 +456,11 @@ class FTPUploader:
         filename_mask = self.filename_mask.get().strip()
 
         if not os.path.isdir(local_dir):
-            self.log("Локальная папка не найдена.")
+            self.log("Локальная папка не найдена.", level="error")
             return
 
         if not filename_mask:
-            self.log("Маска имени файла не указана.")
+            self.log("Маска имени файла не указана.", level="info")
             return
 
         preview_data = []
@@ -451,7 +488,7 @@ class FTPUploader:
             preview_data.append((file, new_name))
 
         if not preview_data:
-            self.log("Нет файлов для предварительного просмотра.")
+            self.log("Нет файлов для предварительного просмотра.", level="info")
             return
 
         self.show_preview_window(preview_data, local_dir)
@@ -461,17 +498,24 @@ class FTPUploader:
         preview_window.title("Предварительный просмотр переименования")
         preview_window.geometry("800x500")
 
-        text = ScrolledText(preview_window, width=100, height=25)
-        text.pack(fill="both", expand=True)
+        tree = ttk.Treeview(preview_window, columns=("old", "new"), show="headings")
+
+        tree.heading("old", text="Старое имя")
+        tree.heading("new", text="Новое имя")
+
+        tree.column("old", width=350)
+        tree.column("new", width=350)
 
         for old, new in preview_data:
-            text.insert(tk.END, f"{old}  →  {new}\n")
+            tree.insert("", "end", values=(old, new))
+
+        tree.pack(fill="both", expand=True)
 
         def confirm():
             self.execute_rename(preview_data, local_dir)
             preview_window.destroy()
 
-        ttk.Button(preview_window, text="Подтвердить переименование", command=confirm, bg="green", fg="white", bootstyle="success").pack(pady=10)
+        ttk.Button(preview_window, text="Подтвердить переименование", command=confirm, bootstyle="success").pack(pady=10)
 
     def execute_rename(self, preview_data, local_dir):
         for old, new in preview_data:
@@ -492,9 +536,9 @@ class FTPUploader:
                 os.rename(old_path, new_path)
                 self.log(f"{old} → {os.path.basename(new_path)}")
             except Exception as e:
-                self.log(f"Ошибка переименования '{old}': {e}")
+                self.log(f"Ошибка переименования '{old}': {e}", level="error")
 
-        self.log("Переименование завершено.")
+        self.log("Переименование завершено.", level="success")
 
     def show_mask_help(self):
         help_window = ttk.Toplevel(self.root)
@@ -528,10 +572,30 @@ class FTPUploader:
         """
 
         text.insert("1.0", help_text)
-        text.config(state="disabled")
+        text.config()
+
+    def set_ui_state(self, state):
+        for widget in self.root.winfo_children():
+            try:
+                widget.configure(state=state)
+            except:
+                pass    
 
     def start_upload(self):
-        threading.Thread(target=self.upload_files).start()
+        if not self.validate_inputs():
+            return
+
+        self.set_ui_state("disabled")
+        self.status_label.config(text="Загрузка...")
+        threading.Thread(target=self._upload_wrapper, daemon=True).start()
+
+    def _upload_wrapper(self):
+        
+        try:
+            self.upload_files()
+        finally:
+            self.root.after(0, lambda: self.set_ui_state("normal"))
+            self.root.after(0, lambda: self.status_label.config(text="Готов"))
 
 
 if __name__ == "__main__":
