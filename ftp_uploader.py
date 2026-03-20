@@ -14,15 +14,23 @@ from datetime import datetime
 load_dotenv()
 
 SPECIAL_SCHOOLS = {
-    "clschool39": ["шря", "clschool39"],
-    "deltaschool": ["дельта", "deltaschool"],
-    "SVU": ["сву", "svu"]
+    "SVU": {
+        "keywords": ["сву", "svu"],
+        "number": "661",
+        "abbr": "СВУ"
+    },
+    "clschool39": {
+        "keywords": ["шря", "clschool39"],
+        "number": "663",
+        "abbr": "ШРЯ"
+    },
+    "deltaschool": {
+        "keywords": ["дельта", "deltaschool"],
+        "number": "664",
+        "abbr": "Дельта"
+    }
 }
-SPECIAL_NUMBERS = {
-    "5661": "SVU",
-    "5663": "clschool39",
-    "5664": "deltaschool"
-}
+
 VALID_OU_NUMBERS = {
     "002",
     "2",
@@ -69,6 +77,9 @@ VALID_OU_NUMBERS = {
     "608",
     "654",
     "658",
+    "661",
+    "663",
+    "664",
 }
 
 class FTPUploader:
@@ -139,6 +150,16 @@ class FTPUploader:
 
         self.filename_mask = ttk.Entry(rename_frame)
         self.filename_mask.grid(row=0, column=1, sticky="ew", padx=5)
+
+        self.ou_mode = ttk.StringVar(value="number")
+
+        ttk.Label(rename_frame, text="Формат ОУ").grid(row=1, column=0, sticky="w")
+
+        ttk.Radiobutton(rename_frame, text="Номер (661)", 
+                        variable=self.ou_mode, value="number").grid(row=1, column=1, sticky="w")
+
+        ttk.Radiobutton(rename_frame, text="Аббревиатура (СВУ)", 
+                        variable=self.ou_mode, value="abbr").grid(row=2, column=1, sticky="w")
 
         ttk.Button(rename_frame, text="?", width=3,
                 command=self.show_mask_help).grid(row=0, column=2)
@@ -245,9 +266,6 @@ class FTPUploader:
 
         for number in all_numbers:
 
-            if number in SPECIAL_NUMBERS:
-                return SPECIAL_NUMBERS[number]
-            
             if number in VALID_OU_NUMBERS:
                 return number
 
@@ -409,10 +427,10 @@ class FTPUploader:
     def extract_special_school(self, text):
         text_lower = text.lower()
 
-        for folder, keywords in SPECIAL_SCHOOLS.items():
-            for keyword in keywords:
+        for folder, data in SPECIAL_SCHOOLS.items():
+            for keyword in data["keywords"]:
                 if keyword.lower() in text_lower:
-                    return folder
+                    return folder  # возвращаем ключ (SVU, clschool39...)
 
         return None
 
@@ -472,16 +490,23 @@ class FTPUploader:
 
             ou_number = self.extract_ou_number(file)
 
+            special_by_number = None
+
+            if ou_number:
+                special_by_number = self.is_special_by_number(ou_number)
+
             if not ou_number:
                 special = self.extract_special_school(file)
                 if not special:
                     continue
                 ou_number = special
 
+            formatted_ou = self.format_ou(ou_number)
+
             new_name = self.generate_filename(
                 filename_mask,
                 file,
-                ou_number,
+                formatted_ou,
                 1
             )
 
@@ -539,6 +564,42 @@ class FTPUploader:
                 self.log(f"Ошибка переименования '{old}': {e}", level="error")
 
         self.log("Переименование завершено.", level="success")
+
+
+    def format_ou(self, ou_value):
+
+        # если это число — проверяем, не спецшкола ли это
+        if str(ou_value).isdigit():
+
+            special_key = self.is_special_by_number(ou_value)
+
+            # 🔥 ВАЖНО: если это спецшкола по номеру — НЕ ТРОГАЕМ
+            if special_key:
+                return ou_value
+
+            return ou_value
+
+        # если это спецшкола по ключу
+        if ou_value in SPECIAL_SCHOOLS:
+            mode = self.ou_mode.get()
+            data = SPECIAL_SCHOOLS[ou_value]
+
+            if mode == "number":
+                return data["number"]
+
+            elif mode == "abbr":
+                return data["abbr"]
+
+            else:
+                return ou_value
+
+        return ou_value
+    
+    def is_special_by_number(self, number):
+        for key, data in SPECIAL_SCHOOLS.items():
+            if data["number"] == str(number):
+                return key
+        return None
 
     def show_mask_help(self):
         help_window = ttk.Toplevel(self.root)
