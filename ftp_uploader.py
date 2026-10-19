@@ -82,6 +82,14 @@ VALID_OU_NUMBERS = {
     "664",
 }
 
+def _norm_num(s):
+    """'002' -> '2', '2' -> '2', '162' -> '162'. Нечисловые — как есть."""
+    try:
+        return str(int(s))
+    except (ValueError, TypeError):
+        return str(s)
+
+
 class FTPUploader:
     def __init__(self, root):
         self.root = root
@@ -340,45 +348,20 @@ class FTPUploader:
                 continue
 
             ou_number = self.extract_ou_number(file)
-            special_folder = None
+            special_key = self.extract_special_school(file)
 
-            if not ou_number:
-                special_folder = self.extract_special_school(file)
+            if not ou_number and not special_key:
+                self.log(f"Пропущен '{file}' — учреждение не распознано.", level="error")
+                continue
 
-                if not special_folder:
-                    self.log(f"Пропущен '{file}' — учреждение не распознано.", level="error")
-                    continue
+            remote_folder = self.find_remote_folder(file, all_dirs)
 
-            remote_folder = None
-
-            # если это специальная школа (не число)
-            if ou_number and not str(ou_number).isdigit():
-
-                for d in all_dirs:
-                    if d.lower() == str(ou_number).lower():
-                        remote_folder = d
-                        break
-
-            # если обычная школа
-            else:
-
-                for d in all_dirs:
-                    numbers = re.findall(r'\d+', d)
-
-                    for num in numbers:
-                        if num == str(ou_number):
-                            remote_folder = d
-                            break
-
-                    if remote_folder:
-                        break
-
-  
             if not remote_folder:
-                if ou_number:
-                    self.log(f"Папка для ОУ {ou_number} не найдена.", level="error")
+                if special_key:
+                    abbr = SPECIAL_SCHOOLS[special_key]["abbr"]
+                    self.log(f"Папка для '{abbr}' ({special_key}) не найдена.", level="error")
                 else:
-                    self.log(f"Папка для учреждения '{special_folder}' не найдена.", level="error")
+                    self.log(f"Папка для ОУ {ou_number} не найдена.", level="error")
                 continue
 
             try:
@@ -489,19 +472,13 @@ class FTPUploader:
                 continue
 
             ou_number = self.extract_ou_number(file)
+            special = self.extract_special_school(file)
 
-            special_by_number = None
+            if not ou_number and not special:
+                continue
 
-            if ou_number:
-                special_by_number = self.is_special_by_number(ou_number)
-
-            if not ou_number:
-                special = self.extract_special_school(file)
-                if not special:
-                    continue
-                ou_number = special
-
-            formatted_ou = self.format_ou(ou_number)
+            # Приоритет у ключевого слова, иначе — номер
+            formatted_ou = self.format_ou(special if special else ou_number)
 
             new_name = self.generate_filename(
                 filename_mask,
@@ -567,31 +544,22 @@ class FTPUploader:
 
 
     def format_ou(self, ou_value):
+        mode = self.ou_mode.get()
 
-        # если это число — проверяем, не спецшкола ли это
-        if str(ou_value).isdigit():
-
+        # Определяем, спецшкола ли это (по ключу ИЛИ по номеру)
+        special_key = None
+        if ou_value in SPECIAL_SCHOOLS:
+            special_key = ou_value
+        elif str(ou_value).isdigit():
             special_key = self.is_special_by_number(ou_value)
 
-            # 🔥 ВАЖНО: если это спецшкола по номеру — НЕ ТРОГАЕМ
-            if special_key:
-                return ou_value
-
-            return ou_value
-
-        # если это спецшкола по ключу
-        if ou_value in SPECIAL_SCHOOLS:
-            mode = self.ou_mode.get()
-            data = SPECIAL_SCHOOLS[ou_value]
-
+        if special_key:
+            data = SPECIAL_SCHOOLS[special_key]
             if mode == "number":
                 return data["number"]
-
             elif mode == "abbr":
                 return data["abbr"]
-
-            else:
-                return ou_value
+            return ou_value
 
         return ou_value
     
@@ -599,6 +567,80 @@ class FTPUploader:
         for key, data in SPECIAL_SCHOOLS.items():
             if data["number"] == str(number):
                 return key
+        return None
+
+    # ↓↓↓ НОВЫЕ МЕТОДЫ ↓↓↓
+
+    def find_remote_folder(self, file, all_dirs):
+        """Ищет подходящую папку на FTP. Возвращает имя папки или None."""
+        ou_number = self.extract_ou_number(file)
+        special_key = self.extract_special_school(file)
+
+        candidates = []  # список (тип, значение): ("special", "SVU") / ("number", "608")
+
+        # 1) Ключевое слово — самый приоритетный вариант
+        if special_key:
+            candidates.append(("special", special_key))
+
+        # 2) Номер (в т.ч. если этот номер принадлежит спецшколе — тоже пробуем как спецшколу)
+        if ou_number:
+            special_by_number = self.is_special_by_number(ou_number)
+            if special_by_number and special_by_number != special_key:
+                candidates.append(("special", special_by_number))
+            candidates.append(("number", str(ou_number)))
+
+        for ctype, cvalue in candidates:
+            folder = self._match_folder(ctype, cvalue, all_dirs)
+            if folder:
+                return folder
+        return None
+
+    def _match_folder(self, ctype, cvalue, all_dirs):
+        if ctype == "special":
+            data = SPECIAL_SCHOOLS.get(cvalue)
+            if not data:
+                return None
+
+            # 1. Точное имя = ключ ("SVU", "clschool39", "deltaschool")
+            for d in all_dirs:
+                if d.strip().casefold() == cvalue.casefold():
+                    return d
+
+            # 2. Точное имя = аббревиатура ("СВУ", "ШРЯ", "Дельта")
+            abbr = data["abbr"]
+            for d in all_dirs:
+                if d.strip().casefold() == abbr.casefold():
+                    return d
+
+            # 3. Номер как отдельный токен ("661", "sc661")
+            number = data["number"]
+            for d in all_dirs:
+                if number in re.findall(r'\d+', d):
+                    return d
+
+            # 4. Ключевое слово внутри имени папки ("svu_folder", "сву_2025")
+            for d in all_dirs:
+                d_low = d.casefold()
+                for kw in data["keywords"]:
+                    if kw.casefold() in d_low:
+                        return d
+
+            return None
+
+                # ctype == "number"
+        # 1. Точное имя папки == номер
+        for d in all_dirs:
+            if d.strip() == cvalue:
+                return d
+
+        # 2. Номер как отдельный токен ("sc608", "608_школа", "int002")
+        #    с нормализацией ведущих нулей: "2" == "002"
+        cvalue_norm = _norm_num(cvalue)
+        for d in all_dirs:
+            tokens = re.findall(r'\d+', d)
+            if any(_norm_num(t) == cvalue_norm for t in tokens):
+                return d
+
         return None
 
     def show_mask_help(self):
